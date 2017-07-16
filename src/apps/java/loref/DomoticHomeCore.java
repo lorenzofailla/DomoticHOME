@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.util.Arrays;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.logging.Handler;
@@ -23,19 +24,20 @@ import apps.java.loref.IMUtilities.IMListener;
 import apps.java.loref.LogUtilities;
 import apps.java.loref.FTPUtilities.FTPUtilitiesListener;
 
-public class DomoticHomeCore {
 
+public class DomoticHomeCore {
+	
 	private final static String USER = "lorenzofailla-home";
 	private final static String PASSWORD = "fornaci12Home";
 	private final static String SERVER = "alpha-labs.net";
-	private final static String RECIPIENT = "lorenzofailla-controller@alpha-labs.net";
-
+	
 	private final static String FTP_SERVER = "ftp.lorenzofailla.esy.es";
 	private final static String FTP_USER = "u533645305";
 	private final static String FTP_PASSWORD = "fornaci12Hostinger";
 	private final static String FTP_REMOTE_DIRECTORY = "/public_html/RasPi-Storage";
 	private final static int FTP_PORT = 21;
 
+	/*
 	private final static String REPLY_PREFIX___WELCOME_MESSAGE = "%%%_welcome_message_%%%";
 	private final static String REPLY_PREFIX___UPTIME_MESSAGE = "%%%_uptime__message_%%%";
 	private final static String REPLY_PREFIX___TORRENTS_LIST = "%%%_torrent_list____%%%";
@@ -43,7 +45,9 @@ public class DomoticHomeCore {
 	private final static String REPLY_PREFIX___DIRECTORY_CONTENT_RESPONSE = "%%%_dir_content_____%%%";
 	private final static String REPLY_PREFIX___HOMEDIR_RESPONSE = "%%%_home_directory__%%%";
 	private final static String REPLY_PREFIX___NOTIFICATION = "%%%_notification____%%%";
-
+	private final static String REPLY_PREFIX___I_AM_ONLINE = "%%%_i_am_online_____%%%";
+	*/
+	
 	private final static String REPLY___UNRECOGNIZED = "Unrecognized command.";
 
 	private final static long RECONNECT_TIMEOUT_MS = 5000L; // millisecondi
@@ -55,7 +59,7 @@ public class DomoticHomeCore {
 	boolean lockKeepAlive = false;
 
 	private boolean loopFlag;
-	private boolean reconnectFlag;
+	private boolean reconnectFlag=true;
 
 	private MainLoop mainLoop;
 	private Thread mainThread;
@@ -64,6 +68,10 @@ public class DomoticHomeCore {
 
 	private IMUtilities imUtilities = null;
 
+	private boolean hasUnixFileSystem = false;
+	private boolean hasTransmission_Remote = false;
+	
+	private String[] authorizedClients = null;
 	
 	private class MainLoop implements Runnable {
 
@@ -118,7 +126,7 @@ public class DomoticHomeCore {
 
 		@Override
 		public void handle(Signal signal) {
-			// TODO Auto-generated method stub
+			
 			System.out.println(String.format("Ricevuto segnale '%s'", signal.getName()));
 		}
 
@@ -153,6 +161,163 @@ public class DomoticHomeCore {
 
 	}
 
+	private void processCommand(String cmdSender, String cmdHeader, String cmdBody){
+		
+		switch (cmdHeader) {
+
+		case "__keepalive_timeout":
+
+			LogUtilities.printSimpleLog("Keepalive received");
+			lockKeepAlive = false;
+
+			break;
+			
+		case "__quit":
+
+			loopFlag = false;
+			
+			break;
+
+		case "__requestWelcomeMessage":
+
+			imUtilities.sendMessage(cmdSender, ReplyPrefix.WELCOME_MESSAGE.prefix() + USER + "@" + SERVER);
+			imUtilities.sendMessage(cmdSender, ReplyPrefix.UPTIME_MESSAGE.prefix() + getUptime());
+
+			break;
+
+		case "__listTorrents":
+
+			imUtilities.sendMessage(cmdSender,ReplyPrefix.TORRENTS_LIST.prefix()
+					+ getTorrentsList());
+
+			break;
+
+		case "__beep":
+
+			System.out.print("\007");
+
+			break;
+
+		case "__shutdown":
+
+			try {
+
+				parseShellCommand("sudo shutdown -h now");
+
+			} catch (IOException | InterruptedException e) {
+
+				LogUtilities.printErrorLog(e);
+
+			}
+
+			break;
+
+		case "__reboot":
+
+			try {
+
+				parseShellCommand("sudo reboot");
+
+			} catch (IOException | InterruptedException e) {
+
+				LogUtilities.printErrorLog(e);
+
+			}
+
+			break;
+
+		case "__execute_command":
+
+			if (!cmdBody.equals("")) {
+				try {
+
+					imUtilities.sendMessage(cmdSender,
+							ReplyPrefix.COMMAND_RESPONSE.prefix() + parseShellCommand(cmdBody));
+
+				} catch (IOException | InterruptedException e) {
+
+					LogUtilities.printErrorLog(e);
+
+				}
+
+			}
+
+			break;
+
+		case "__get_homedir":
+
+			try {
+
+				imUtilities.sendMessage(cmdSender, ReplyPrefix.HOMEDIR_RESPONSE.prefix() + parseShellCommand("pwd"));
+
+			} catch (IOException | InterruptedException e) {
+
+				LogUtilities.printErrorLog(e);
+
+			}
+
+			break;
+
+		case "__get_directory_content":
+
+			if (!cmdBody.equals("")) {
+
+				try {
+
+					imUtilities.sendMessage(cmdSender, ReplyPrefix.DIRECTORY_CONTENT_RESPONSE.prefix()
+							+ parseShellCommand(String.format("ls %s -al", cmdBody)));
+
+				} catch (IOException | InterruptedException e) {
+
+					LogUtilities.printErrorLog(e);
+
+				}
+
+			}
+
+			break;
+
+		case "__get_file":
+
+			if (!cmdBody.equals("")) {
+
+				/*
+				 * invia il file il cui percorso completo è
+				 * rappresentato dalla stringa messageBody
+				 */
+
+				imUtilities.sendFile(cmdSender, cmdBody);
+
+			}
+
+			break;
+
+		case "__upload_file_to_FTP":
+
+			if (!cmdBody.equals("")) {
+
+				/*
+				 * invia il file il cui percorso completo è
+				 * rappresentato dalla stringa commandBody
+				 */
+
+				LogUtilities.printSimpleLog("Initiating FTP upload required for: " + cmdBody);
+				sendFileToFTPRemoteDirectory(cmdBody);
+
+			}
+
+			break;
+
+		default:
+
+			imUtilities.sendMessage(cmdSender, REPLY___UNRECOGNIZED + " [" + cmdBody + "]");
+			LogUtilities.printSimpleLog("Unrecognized command: " + cmdBody + " from: " + cmdSender);
+
+		} /* fine switch lettura comandi */
+		
+		
+	}
+	
 	private void init() {
 
 		IMListener imListener = new IMListener() {
@@ -169,177 +334,18 @@ public class DomoticHomeCore {
 					commandBody = commandSplit[1];
 				}
 
-				switch (sender) {
+				if (checkIfRecipientIsAuthorized(sender)) {
 
-				/* inizio case */
-				case USER + "@" + SERVER:
-
-					switch (commandHeader) {
-					case "__keepalive_timeout":
-
-						LogUtilities.printSimpleLog("Keepalive received");
-						lockKeepAlive = false;
-
-						break;
-
-					}
-					break;
-				/* fine case */
-
-				/* inizio case */
-				case RECIPIENT:
-
-					switch (commandHeader) {
-
-					case "__quit":
-
-						loopFlag = false;
-						break;
-
-					case "__requestWelcomeMessage":
-
-						imUtilities.sendMessage(sender, REPLY_PREFIX___WELCOME_MESSAGE + USER + "@" + SERVER);
-						imUtilities.sendMessage(sender, REPLY_PREFIX___UPTIME_MESSAGE + getUptime());
-
-						break;
-
-					case "__listTorrents":
-
-						imUtilities.sendMessage(sender, REPLY_PREFIX___TORRENTS_LIST
-								+ getTorrentsList());
-
-						break;
-
-					case "__beep":
-
-						System.out.print("\007");
-
-						break;
-
-					case "__shutdown":
-
-						try {
-
-							parseShellCommand("sudo shutdown -h now");
-
-						} catch (IOException | InterruptedException e) {
-
-							LogUtilities.printErrorLog(e);
-
-						}
-
-						break;
-
-					case "__reboot":
-
-						try {
-
-							parseShellCommand("sudo reboot");
-
-						} catch (IOException | InterruptedException e) {
-
-							LogUtilities.printErrorLog(e);
-
-						}
-
-						break;
-
-					case "__execute_command":
-
-						if (!commandBody.equals("")) {
-							try {
-
-								imUtilities.sendMessage(sender,
-										REPLY_PREFIX___COMMAND_RESPONSE + parseShellCommand(commandBody));
-
-							} catch (IOException | InterruptedException e) {
-
-								LogUtilities.printErrorLog(e);
-
-							}
-
-						}
-
-						break;
-
-					case "__get_homedir":
-
-						try {
-
-							imUtilities.sendMessage(sender, REPLY_PREFIX___HOMEDIR_RESPONSE + parseShellCommand("pwd"));
-
-						} catch (IOException | InterruptedException e) {
-
-							LogUtilities.printErrorLog(e);
-
-						}
-
-						break;
-
-					case "__get_directory_content":
-
-						if (!commandBody.equals("")) {
-
-							try {
-
-								imUtilities.sendMessage(sender, REPLY_PREFIX___DIRECTORY_CONTENT_RESPONSE
-										+ parseShellCommand(String.format("ls %s -al", commandBody)));
-
-							} catch (IOException | InterruptedException e) {
-
-								LogUtilities.printErrorLog(e);
-
-							}
-
-						}
-
-						break;
-
-					case "__get_file":
-
-						if (!commandBody.equals("")) {
-
-							/*
-							 * invia il file il cui percorso completo è
-							 * rappresentato dalla stringa messageBody
-							 */
-
-							imUtilities.sendFile(sender, commandBody);
-
-						}
-
-						break;
-
-					case "__upload_file_to_FTP":
-
-						if (!commandBody.equals("")) {
-
-							/*
-							 * invia il file il cui percorso completo è
-							 * rappresentato dalla stringa commandBody
-							 */
-
-							LogUtilities.printSimpleLog("Initiating FTP upload required for: " + commandBody);
-							sendFileToFTPRemoteDirectory(commandBody);
-
-						}
-
-						break;
-
-					default:
-
-						imUtilities.sendMessage(sender, REPLY___UNRECOGNIZED + " [" + messageBody + "]");
-						LogUtilities.printSimpleLog("Unrecognized command: " + messageBody);
-
-					} /* fine switch lettura comandi */
-
-					break;
+					processCommand(sender, commandHeader,commandBody);
 					
-				default:
+					
+
+									
+				} else {
 
 					LogUtilities.printSimpleLog("Unauthorized sender. Ignoring");
 
-				} /* fine switch lettura mittente */
+				} 
 
 				// aggiorna il timestamp relativo all'ultima attività rilevata
 				updateLastActivityMark();
@@ -363,7 +369,10 @@ public class DomoticHomeCore {
 
 			@Override
 			public void onConnectionInterrupted(Exception e) {
-				// TODO Auto-generated method stub
+				/*
+				 * La connessione è stata interrotta, interrompe il mainloop valorizzando a true il flag per la riconnessione
+				 * 
+				 * */
 
 				LogUtilities.printErrorLog(e);
 
@@ -395,13 +404,13 @@ public class DomoticHomeCore {
 
 			@Override
 			public void onConnectionClosed() {
-
 				
 				
 			}
 
 		};
-
+		
+		getConfig();
 		
 		loopFlag = true;
 		imUtilities = new IMUtilities(USER, PASSWORD, SERVER);
@@ -423,6 +432,18 @@ public class DomoticHomeCore {
 
 	}
 
+	private void getConfig() {
+		
+		authorizedClients = new String[]{"lorenzofailla-controller@alpha-labs.net",""};
+				
+	}
+	
+	private boolean checkIfRecipientIsAuthorized(String recipient){
+		
+		return (Arrays.asList(authorizedClients).contains(recipient));
+				
+	}
+	
 	private void retrieveServices() {
 
 		System.out.print("Checking 'uptime'...");
@@ -430,11 +451,14 @@ public class DomoticHomeCore {
 
 			parseShellCommand("uptime");
 			System.out.print(" PASS.\n");
+			
+			hasUnixFileSystem=true;
 
 		} catch (IOException | InterruptedException e) {
 
 			System.out.print(" FAIL.\n");
-
+			hasUnixFileSystem=false;
+			
 		}
 
 		System.out.print("Checking 'transmission-remote'...");
@@ -442,11 +466,14 @@ public class DomoticHomeCore {
 			parseShellCommand("transmission-remote -n transmission:transmission -l");
 			System.out.print(" PASS.\n");
 
+			hasTransmission_Remote=true;
+					
 		} catch (IOException | InterruptedException e) {
 
 			System.out.print(" FAIL.\n");
-
+			hasTransmission_Remote=false;
 		}
+		
 	}
 
 	private String parseShellCommand(String command) throws IOException, InterruptedException {
