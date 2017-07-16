@@ -4,19 +4,12 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.Arrays;
 import java.util.Timer;
 import java.util.TimerTask;
-import java.util.logging.Handler;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-
 import sun.misc.*;
-
-import org.jivesoftware.smack.SmackException;
-import org.jivesoftware.smack.SmackException.NotConnectedException;
-import org.jivesoftware.smack.XMPPException;
-import org.jxmpp.stringprep.XmppStringprepException;
 
 import apps.java.loref.FTPUtilities;
 import apps.java.loref.IMUtilities;
@@ -354,7 +347,7 @@ public class DomoticHomeCore {
 
 			@Override
 			public void onConnected() {
-
+				
 				timer.cancel();
 				System.out.println(LogUtilities.basicLog("Instant messaging service connected and listening."));
 
@@ -364,6 +357,9 @@ public class DomoticHomeCore {
 				mainLoop = new MainLoop();
 				mainThread = new Thread(mainLoop);
 				mainThread.start();
+				
+				/* invia una notifica a tutti gli utenti */
+				notifyWithFCM("HOME node", "is online", USER);
 
 			}
 
@@ -636,6 +632,23 @@ public class DomoticHomeCore {
 
 		}
 
+	}
+	
+	private void notifyWithFCM(String title, String message, String topic){
+		
+		URL url;
+		try {
+			
+			url = new URL("http://lorenzofailla.esy.es/DomoticHome/CloudMessaging/sendnotification.php?Action=N&notificationTitle="+title+"&notificationMessage="+message+"&topicId="+topic+"");
+			HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+			
+		} catch (IOException e) {
+			
+			// TODO Auto-generated catch block
+			
+			e.printStackTrace();
+		}
+				
 	}
 
 }
